@@ -1,4 +1,3 @@
-
 name: Build Zana Delivery APK
 
 on:
@@ -50,4 +49,3 @@ jobs:
         with:
           name: zana-delivery-android-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-          
