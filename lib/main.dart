@@ -141,8 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 t('ستظهر طلباتك هنا بعد تسجيل الدخول.', 'Your orders will appear here after sign-in.')),
             _simplePage(Icons.favorite_border, t('المفضلة', 'Favorites'),
                 t('احفظ متاجرك ومنتجاتك المفضلة هنا.', 'Save your favorite shops and products here.')),
-            _simplePage(Icons.person_outline, t('حسابي', 'My account'),
-                t('ملفك الشخصي وعناوينك ووسائل الدفع.', 'Your profile, addresses and payment methods.')),
+            AdminAccessPage(isArabic: widget.isArabic),
           ],
         ),
         bottomNavigationBar: NavigationBar(
@@ -512,4 +511,303 @@ class _ProductsPageState extends State<ProductsPage> {
       ),
     );
   }
+}
+
+
+class AdminAccessPage extends StatefulWidget {
+  final bool isArabic;
+  const AdminAccessPage({super.key, required this.isArabic});
+
+  @override
+  State<AdminAccessPage> createState() => _AdminAccessPageState();
+}
+
+class _AdminAccessPageState extends State<AdminAccessPage> {
+  final email = TextEditingController();
+  final password = TextEditingController();
+  bool loading = false;
+  bool authorized = false;
+  String? errorText;
+
+  String tr(String ar, String en) => widget.isArabic ? ar : en;
+
+  Future<void> signIn() async {
+    setState(() { loading = true; errorText = null; });
+    try {
+      await Supabase.instance.client.auth.signInWithPassword(
+        email: email.text.trim(),
+        password: password.text,
+      );
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) throw Exception('No active user');
+      final profile = await Supabase.instance.client
+          .from('profiles').select('role').eq('id', user.id).maybeSingle();
+      if (profile == null || profile['role'] != 'admin') {
+        await Supabase.instance.client.auth.signOut();
+        throw Exception(tr('هذا الحساب ليس حساب مدير.', 'This account is not an administrator.'));
+      }
+      if (mounted) setState(() => authorized = true);
+    } catch (e) {
+      if (mounted) setState(() => errorText = e.toString());
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    email.dispose();
+    password.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (authorized) {
+      return Directionality(
+        textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+        child: AdminDashboard(isArabic: widget.isArabic),
+      );
+    }
+    return Directionality(
+      textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        appBar: AppBar(title: Text(tr('إدارة زانا', 'Zana Admin'))),
+        body: ListView(padding: const EdgeInsets.all(20), children: [
+          const Icon(Icons.admin_panel_settings, color: brandRed, size: 64),
+          const SizedBox(height: 12),
+          Text(tr('دخول المدير', 'Administrator sign in'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 18),
+          TextField(controller: email, keyboardType: TextInputType.emailAddress,
+            decoration: InputDecoration(labelText: tr('البريد الإلكتروني', 'Email'), border: const OutlineInputBorder())),
+          const SizedBox(height: 12),
+          TextField(controller: password, obscureText: true,
+            decoration: InputDecoration(labelText: tr('كلمة المرور', 'Password'), border: const OutlineInputBorder())),
+          if (errorText != null) Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Text(errorText!, style: const TextStyle(color: Colors.red)),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: loading ? null : signIn,
+            style: FilledButton.styleFrom(backgroundColor: brandRed),
+            child: loading ? const CircularProgressIndicator(color: Colors.white)
+              : Text(tr('دخول لوحة الإدارة', 'Open admin dashboard')),
+          ),
+          const SizedBox(height: 8),
+          Text(tr('هذه الصفحة مخصصة لحساب المدير فقط.', 'This page is restricted to the administrator account.'),
+            textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54)),
+        ]),
+      ),
+    );
+  }
+}
+
+class AdminDashboard extends StatefulWidget {
+  final bool isArabic;
+  const AdminDashboard({super.key, required this.isArabic});
+
+  @override
+  State<AdminDashboard> createState() => _AdminDashboardState();
+}
+
+class _AdminDashboardState extends State<AdminDashboard> {
+  late Future<List<Map<String, dynamic>>> futureStores;
+  String tr(String ar, String en) => widget.isArabic ? ar : en;
+
+  @override
+  void initState() {
+    super.initState();
+    futureStores = loadStores();
+  }
+
+  Future<List<Map<String, dynamic>>> loadStores() async {
+    final data = await Supabase.instance.client.from('stores')
+      .select('id,name,category,description,phone,address,image_url,is_active')
+      .order('created_at', ascending: false);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  Future<void> refresh() async => setState(() => futureStores = loadStores());
+
+  Future<void> addStore() async {
+    final name = TextEditingController();
+    final category = TextEditingController(text: 'restaurant');
+    final description = TextEditingController();
+    final phone = TextEditingController();
+    final address = TextEditingController();
+    final image = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (ctx) =>
+      Directionality(textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+        child: AlertDialog(
+          title: Text(tr('إضافة مطعم أو متجر', 'Add restaurant or store')),
+          content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            _field(name, tr('اسم المطعم / المتجر', 'Restaurant / store name')),
+            _field(category, tr('القسم (مثلاً restaurant)', 'Category (e.g. restaurant)')),
+            _field(description, tr('الوصف', 'Description')),
+            _field(phone, tr('رقم الهاتف', 'Phone')),
+            _field(address, tr('العنوان', 'Address')),
+            _field(image, tr('رابط صورة اختياري', 'Optional image URL')),
+          ])),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('إلغاء', 'Cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('حفظ', 'Save'))),
+          ],
+        )));
+    if (ok == true && name.text.trim().isNotEmpty) {
+      try {
+        await Supabase.instance.client.from('stores').insert({
+          'name': name.text.trim(),
+          'category': category.text.trim().isEmpty ? 'restaurant' : category.text.trim(),
+          'description': description.text.trim(),
+          'phone': phone.text.trim(),
+          'address': address.text.trim(),
+          'image_url': image.text.trim().isEmpty ? null : image.text.trim(),
+          'is_active': true,
+        });
+        await refresh();
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr('تمت إضافة المتجر.', 'Store added.'))));
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())));
+      }
+    }
+    name.dispose(); category.dispose(); description.dispose();
+    phone.dispose(); address.dispose(); image.dispose();
+  }
+
+  Widget _field(TextEditingController controller, String label) =>
+    Padding(padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(controller: controller, decoration: InputDecoration(labelText: label, border: const OutlineInputBorder())));
+
+  Future<void> addProduct(Map<String, dynamic> store) async {
+    final name = TextEditingController();
+    final description = TextEditingController();
+    final price = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (ctx) =>
+      Directionality(textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+        child: AlertDialog(
+          title: Text(tr('إضافة منتج', 'Add product')),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            _field(name, tr('اسم المنتج', 'Product name')),
+            _field(description, tr('الوصف', 'Description')),
+            _field(price, tr('السعر', 'Price')),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('إلغاء', 'Cancel'))),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('حفظ', 'Save'))),
+          ],
+        )));
+    if (ok == true && name.text.trim().isNotEmpty && num.tryParse(price.text.trim()) != null) {
+      try {
+        await Supabase.instance.client.from('products').insert({
+          'store_id': store['id'],
+          'name': name.text.trim(),
+          'description': description.text.trim(),
+          'price': num.parse(price.text.trim()),
+          'is_available': true,
+        });
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr('تمت إضافة المنتج.', 'Product added.'))));
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } else if (ok == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(tr('أدخل اسماً وسعراً صحيحاً.', 'Enter a name and valid price.'))));
+    }
+    name.dispose(); description.dispose(); price.dispose();
+  }
+
+  Future<void> toggleStore(Map<String, dynamic> store) async {
+    try {
+      await Supabase.instance.client.from('stores')
+        .update({'is_active': !(store['is_active'] == true)})
+        .eq('id', store['id']);
+      await refresh();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> deleteStore(Map<String, dynamic> store) async {
+    final yes = await showDialog<bool>(context: context, builder: (ctx) =>
+      AlertDialog(
+        title: Text(tr('حذف المتجر؟', 'Delete store?')),
+        content: Text(tr('قد يمنع وجود منتجات أو طلبات مرتبطة حذف المتجر.', 'Related products or orders may prevent deletion.')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('إلغاء', 'Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('حذف', 'Delete'))),
+        ],
+      ));
+    if (yes == true) {
+      try {
+        await Supabase.instance.client.from('stores').delete().eq('id', store['id']);
+        await refresh();
+      } catch (e) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr('تعذر الحذف. ربما توجد طلبات مرتبطة بهذا المتجر.', 'Delete failed. This store may have linked orders.'))));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: Text(tr('لوحة إدارة زانا', 'Zana Admin Dashboard')),
+      actions: [
+        IconButton(tooltip: tr('تسجيل الخروج', 'Sign out'),
+          onPressed: () async {
+            await Supabase.instance.client.auth.signOut();
+            if (mounted) Navigator.of(context).pop();
+          }, icon: const Icon(Icons.logout)),
+      ],
+    ),
+    floatingActionButton: FloatingActionButton.extended(
+      onPressed: addStore, backgroundColor: brandRed,
+      icon: const Icon(Icons.add, color: Colors.white),
+      label: Text(tr('إضافة مطعم', 'Add restaurant'), style: const TextStyle(color: Colors.white)),
+    ),
+    body: FutureBuilder<List<Map<String, dynamic>>>(
+      future: futureStores,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+        if (snapshot.hasError) return Center(child: Text(snapshot.error.toString()));
+        final stores = snapshot.data ?? [];
+        if (stores.isEmpty) return Center(child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(tr('لا توجد مطاعم أو متاجر بعد. اضغط «إضافة مطعم» للبدء.', 'No restaurants or stores yet. Tap Add restaurant to begin.'), textAlign: TextAlign.center),
+        ));
+        return RefreshIndicator(
+          onRefresh: refresh,
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
+            itemCount: stores.length,
+            itemBuilder: (context, i) {
+              final s = stores[i];
+              return Card(
+                color: Colors.white,
+                child: ExpansionTile(
+                  leading: const CircleAvatar(backgroundColor: paleRed, child: Icon(Icons.restaurant, color: brandRed)),
+                  title: Text((s['name'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text((s['category'] ?? '').toString() + ' • ' + (s['is_active'] == true ? tr('نشط', 'Active') : tr('متوقف', 'Paused'))),
+                  children: [
+                    ListTile(title: Text((s['address'] ?? '').toString()), subtitle: Text((s['phone'] ?? '').toString())),
+                    Wrap(alignment: WrapAlignment.center, children: [
+                      TextButton.icon(onPressed: () => addProduct(s), icon: const Icon(Icons.add_shopping_cart), label: Text(tr('إضافة منتج', 'Add product'))),
+                      TextButton.icon(onPressed: () => toggleStore(s), icon: const Icon(Icons.toggle_on), label: Text(s['is_active'] == true ? tr('إيقاف', 'Pause') : tr('تفعيل', 'Activate'))),
+                      TextButton.icon(onPressed: () => deleteStore(s), icon: const Icon(Icons.delete_outline, color: Colors.red), label: Text(tr('حذف', 'Delete'))),
+                    ]),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    ),
+  );
 }
