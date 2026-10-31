@@ -517,36 +517,51 @@ class _ProductsPageState extends State<ProductsPage> {
 class AdminAccessPage extends StatefulWidget {
   final bool isArabic;
   const AdminAccessPage({super.key, required this.isArabic});
-
   @override
   State<AdminAccessPage> createState() => _AdminAccessPageState();
 }
 
 class _AdminAccessPageState extends State<AdminAccessPage> {
-  final email = TextEditingController();
+  final identity = TextEditingController();
   final password = TextEditingController();
-  bool loading = false;
-  bool authorized = false;
-  String? errorText;
-
+  bool loading = false, isRegister = false, obscure = true;
+  String? errorText, successText;
   String tr(String ar, String en) => widget.isArabic ? ar : en;
 
-  Future<void> signIn() async {
-    setState(() { loading = true; errorText = null; });
+  String normalizeSyrianPhone(String value) {
+    var digits = value.trim().replaceAll(RegExp(r'[\\s\\-()]'), '');
+    if (digits.startsWith('+963')) return digits;
+    if (digits.startsWith('00963')) return '+${digits.substring(2)}';
+    if (digits.startsWith('963')) return '+$digits';
+    if (digits.startsWith('0')) digits = digits.substring(1);
+    if (RegExp(r'^9\\d{8}$').hasMatch(digits)) return '+963$digits';
+    throw FormatException(tr('أدخل رقم هاتف سوري مثل 09xxxxxxxx', 'Enter a Syrian mobile number such as 09xxxxxxxx'));
+  }
+
+  Future<void> submit() async {
+    setState(() { loading = true; errorText = null; successText = null; });
     try {
-      await Supabase.instance.client.auth.signInWithPassword(
-        email: email.text.trim(),
-        password: password.text,
-      );
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user == null) throw Exception('No active user');
-      final profile = await Supabase.instance.client
-          .from('profiles').select('role').eq('id', user.id).maybeSingle();
-      if (profile == null || profile['role'] != 'admin') {
-        await Supabase.instance.client.auth.signOut();
-        throw Exception(tr('هذا الحساب ليس حساب مدير.', 'This account is not an administrator.'));
+      final auth = Supabase.instance.client.auth;
+      final value = identity.text.trim();
+      if (isRegister) {
+        final phone = normalizeSyrianPhone(value);
+        if (password.text.length < 6) throw Exception(tr('كلمة المرور يجب أن تكون 6 أحرف على الأقل.', 'Password must be at least 6 characters.'));
+        final result = await auth.signUp(phone: phone, password: password.text);
+        if (result.session == null) {
+          setState(() => successText = tr('تم إرسال طلب التسجيل. إذا طُلب تأكيد الهاتف، يجب تعطيل تأكيد الهاتف من إعدادات Supabase أولاً.', 'Signup submitted. If phone confirmation is required, disable phone confirmations in Supabase first.'));
+          return;
+        }
+        await openAccount();
+      } else {
+        if (value.contains('@')) {
+          await auth.signInWithPassword(email: value, password: password.text);
+        } else {
+          await auth.signInWithPassword(phone: normalizeSyrianPhone(value), password: password.text);
+        }
+        await openAccount();
       }
-      if (mounted) setState(() => authorized = true);
+    } on FormatException catch (e) {
+      if (mounted) setState(() => errorText = e.message);
     } catch (e) {
       if (mounted) setState(() => errorText = e.toString());
     } finally {
@@ -554,54 +569,91 @@ class _AdminAccessPageState extends State<AdminAccessPage> {
     }
   }
 
-  @override
-  void dispose() {
-    email.dispose();
-    password.dispose();
-    super.dispose();
+  Future<void> openAccount() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) throw Exception(tr('تعذر إنشاء جلسة دخول.', 'Could not establish a sign-in session.'));
+    final profile = await Supabase.instance.client.from('profiles').select('role').eq('id', user.id).maybeSingle();
+    if (!mounted) return;
+    if (profile?['role'] == 'admin') {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) =>
+        Directionality(textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+          child: AdminDashboard(isArabic: widget.isArabic))));
+    } else {
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) =>
+        CustomerAccountPage(isArabic: widget.isArabic)));
+    }
   }
 
   @override
+  void dispose() { identity.dispose(); password.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => Directionality(
+    textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+    child: Scaffold(
+      appBar: AppBar(title: Text(tr('حساب زانا', 'Zana account'))),
+      body: ListView(padding: const EdgeInsets.all(20), children: [
+        const Icon(Icons.account_circle_outlined, color: brandRed, size: 68),
+        const SizedBox(height: 10),
+        Text(isRegister ? tr('إنشاء حساب زبون', 'Create customer account') : tr('تسجيل الدخول', 'Sign in'),
+          textAlign: TextAlign.center, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Text(tr('الزبائن يدخلون برقم الهاتف، والمدير بالبريد الإلكتروني.', 'Customers use a phone number; the administrator can use an email address.'),
+          textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54)),
+        const SizedBox(height: 20),
+        TextField(controller: identity, keyboardType: isRegister ? TextInputType.phone : TextInputType.emailAddress,
+          decoration: InputDecoration(labelText: isRegister ? tr('رقم الهاتف السوري', 'Syrian phone number') : tr('رقم الهاتف أو البريد الإلكتروني', 'Phone number or email'),
+            hintText: isRegister ? '09xxxxxxxx' : tr('09xxxxxxxx أو البريد الإداري', '09xxxxxxxx or admin email'),
+            border: const OutlineInputBorder())),
+        const SizedBox(height: 12),
+        TextField(controller: password, obscureText: obscure,
+          decoration: InputDecoration(labelText: tr('كلمة المرور', 'Password'), border: const OutlineInputBorder(),
+            suffixIcon: IconButton(onPressed: () => setState(() => obscure = !obscure),
+              icon: Icon(obscure ? Icons.visibility : Icons.visibility_off)))),
+        if (errorText != null) Padding(padding: const EdgeInsets.only(top: 12),
+          child: Text(errorText!, style: const TextStyle(color: Colors.red))),
+        if (successText != null) Padding(padding: const EdgeInsets.only(top: 12),
+          child: Text(successText!, style: const TextStyle(color: Colors.green))),
+        const SizedBox(height: 16),
+        FilledButton(onPressed: loading ? null : submit,
+          style: FilledButton.styleFrom(backgroundColor: brandRed, padding: const EdgeInsets.all(14)),
+          child: loading ? const CircularProgressIndicator(color: Colors.white) :
+            Text(isRegister ? tr('إنشاء الحساب', 'Create account') : tr('دخول', 'Sign in'))),
+        TextButton(onPressed: loading ? null : () => setState(() { isRegister = !isRegister; errorText = null; successText = null; }),
+          child: Text(isRegister ? tr('لدي حساب بالفعل – تسجيل الدخول', 'I already have an account – Sign in') :
+            tr('مستخدم جديد؟ إنشاء حساب', 'New customer? Create an account'))),
+        const SizedBox(height: 8),
+        Text(tr('لا يمكن إنشاء حساب مدير من هذه الصفحة. صلاحية المدير تُحدد من قاعدة البيانات فقط.',
+          'Admin accounts cannot be created here. Admin access is assigned only in the database.'),
+          textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54, fontSize: 12)),
+      ]),
+    ));
+}
+
+class CustomerAccountPage extends StatelessWidget {
+  final bool isArabic;
+  const CustomerAccountPage({super.key, required this.isArabic});
+  @override
   Widget build(BuildContext context) {
-    if (authorized) {
-      return Directionality(
-        textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
-        child: AdminDashboard(isArabic: widget.isArabic),
-      );
-    }
-    return Directionality(
-      textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
-      child: Scaffold(
-        appBar: AppBar(title: Text(tr('إدارة زانا', 'Zana Admin'))),
-        body: ListView(padding: const EdgeInsets.all(20), children: [
-          const Icon(Icons.admin_panel_settings, color: brandRed, size: 64),
-          const SizedBox(height: 12),
-          Text(tr('دخول المدير', 'Administrator sign in'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 18),
-          TextField(controller: email, keyboardType: TextInputType.emailAddress,
-            decoration: InputDecoration(labelText: tr('البريد الإلكتروني', 'Email'), border: const OutlineInputBorder())),
-          const SizedBox(height: 12),
-          TextField(controller: password, obscureText: true,
-            decoration: InputDecoration(labelText: tr('كلمة المرور', 'Password'), border: const OutlineInputBorder())),
-          if (errorText != null) Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Text(errorText!, style: const TextStyle(color: Colors.red)),
-          ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: loading ? null : signIn,
-            style: FilledButton.styleFrom(backgroundColor: brandRed),
-            child: loading ? const CircularProgressIndicator(color: Colors.white)
-              : Text(tr('دخول لوحة الإدارة', 'Open admin dashboard')),
-          ),
-          const SizedBox(height: 8),
-          Text(tr('هذه الصفحة مخصصة لحساب المدير فقط.', 'This page is restricted to the administrator account.'),
-            textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54)),
-        ]),
-      ),
-    );
+    final ar = isArabic;
+    return Directionality(textDirection: ar ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(appBar: AppBar(title: Text(ar ? 'حسابي في زانا' : 'My Zana account')),
+        body: Center(child: Padding(padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.check_circle_outline, color: brandRed, size: 64),
+            const SizedBox(height: 14),
+            Text(ar ? 'تم تسجيل الدخول بنجاح' : 'You are signed in',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text(Supabase.instance.client.auth.currentUser?.phone ?? Supabase.instance.client.auth.currentUser?.email ?? '',
+              textDirection: TextDirection.ltr),
+            const SizedBox(height: 20),
+            FilledButton.icon(onPressed: () async {
+              await Supabase.instance.client.auth.signOut();
+              if (context.mounted) Navigator.of(context).pop();
+            }, icon: const Icon(Icons.logout), label: Text(ar ? 'تسجيل الخروج' : 'Sign out'),
+              style: FilledButton.styleFrom(backgroundColor: brandRed)),
+          ])))));
   }
 }
 
