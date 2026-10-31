@@ -1,4 +1,4 @@
-name: Build Zana Delivery APK
+name: Prepare and Build Zana Delivery APK
 
 on:
   workflow_dispatch:
@@ -7,27 +7,44 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build-android:
+  prepare-and-build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Get repository files
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-      - name: Extract Zana project ZIP
+      - name: Extract Flutter source into repository
+        shell: bash
         run: |
-          ARCHIVE=$(find . -maxdepth 1 -iname '*.zip' -print -quit)
-          if [ -z "$ARCHIVE" ]; then
-            echo "Project ZIP not found"
-            exit 1
-          fi
-          mkdir extracted
-          unzip -o "$ARCHIVE" -d extracted
-          cp -a extracted/. .
+          set -euo pipefail
+          ARCHIVE="Zana_Delivery_Modified_Starter.zip"
+          test -f "$ARCHIVE" || { echo "Missing $ARCHIVE"; exit 1; }
+          mkdir -p /tmp/zana-extract
+          unzip -oq "$ARCHIVE" -d /tmp/zana-extract
+          PUBSPEC="$(find /tmp/zana-extract -name pubspec.yaml -type f -print -quit)"
+          test -n "$PUBSPEC" || { echo "pubspec.yaml not found in ZIP"; find /tmp/zana-extract -maxdepth 3 -type f | head -80; exit 1; }
+          PROJECT_DIR="$(dirname "$PUBSPEC")"
+          echo "Flutter project found at: $PROJECT_DIR"
+          rsync -a --delete --exclude='.git/' --exclude='.github/' "$PROJECT_DIR/" ./
           test -f pubspec.yaml
+          echo "Flutter source files extracted."
+
+      - name: Commit extracted source files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+          else
+            git commit -m "Prepare Flutter source files from starter archive"
+            git push
+          fi
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -35,16 +52,16 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Prepare Android project
+      - name: Prepare Android platform
         run: flutter create --platforms=android .
 
-      - name: Get dependencies
+      - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK
+      - name: Build release APK
         run: flutter build apk --release
 
-      - name: Save APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: zana-delivery-android-apk
