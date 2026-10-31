@@ -18,33 +18,8 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Extract Flutter source into repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          ARCHIVE="Zana_Delivery_Modified_Starter.zip"
-          test -f "$ARCHIVE" || { echo "Missing $ARCHIVE"; exit 1; }
-          mkdir -p /tmp/zana-extract
-          unzip -oq "$ARCHIVE" -d /tmp/zana-extract
-          PUBSPEC="$(find /tmp/zana-extract -name pubspec.yaml -type f -print -quit)"
-          test -n "$PUBSPEC" || { echo "pubspec.yaml not found in ZIP"; find /tmp/zana-extract -maxdepth 3 -type f | head -80; exit 1; }
-          PROJECT_DIR="$(dirname "$PUBSPEC")"
-          echo "Flutter project found at: $PROJECT_DIR"
-          rsync -a --delete --exclude='.git/' --exclude='.github/' "$PROJECT_DIR/" ./
-          test -f pubspec.yaml
-          echo "Flutter source files extracted."
-
-      - name: Commit extracted source files
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No source changes to commit."
-          else
-            git commit -m "Prepare Flutter source files from starter archive"
-            git push
-          fi
+      - name: Verify Flutter project files
+        run: test -f pubspec.yaml && test -f lib/main.dart
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
