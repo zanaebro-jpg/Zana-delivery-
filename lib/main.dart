@@ -233,8 +233,12 @@ class _HomeScreenState extends State<HomeScreen> {
             final item = visible[index];
             return InkWell(
               borderRadius: BorderRadius.circular(16),
-              onTap: () => _notice(t('سيتم تفعيل هذا القسم عند ربط المتاجر.',
-                  'This category will be enabled when shops are connected.')),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => StoresPage(
+                  isArabic: widget.isArabic,
+                  category: widget.isArabic ? item.ar : item.en,
+                ),
+              )),
               child: Container(
                 decoration: BoxDecoration(
                   color: Colors.white, borderRadius: BorderRadius.circular(16),
@@ -315,6 +319,197 @@ class _HomeScreenState extends State<HomeScreen> {
   void _notice(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+}
+
+class StoresPage extends StatefulWidget {
+  final bool isArabic;
+  final String category;
+  const StoresPage({super.key, required this.isArabic, required this.category});
+
+  @override
+  State<StoresPage> createState() => _StoresPageState();
+}
+
+class _StoresPageState extends State<StoresPage> {
+  late Future<List<Map<String, dynamic>>> storesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    storesFuture = _loadStores();
+  }
+
+  Future<List<Map<String, dynamic>>> _loadStores() async {
+    final rows = await Supabase.instance.client
+        .from('stores')
+        .select('id,name,category,description,address,image_url')
+        .eq('is_active', true)
+        .order('name');
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
+  String tr(String ar, String en) => widget.isArabic ? ar : en;
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: widget.isArabic ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        appBar: AppBar(title: Text(widget.category)),
+        body: FutureBuilder<List<Map<String, dynamic>>>(
+          future: storesFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator(color: brandRed));
+            }
+            if (snapshot.hasError) {
+              return _message(Icons.wifi_off, tr('تعذر تحميل المتاجر. تحقق من الاتصال ثم أعد المحاولة.', 'Could not load stores. Check your connection and retry.'));
+            }
+            final stores = snapshot.data ?? [];
+            if (stores.isEmpty) {
+              return _message(Icons.storefront_outlined, tr('لا توجد متاجر مضافة حالياً في ديرك. ستظهر هنا بعد أن يضيفها المدير.', 'No stores have been added in Derik yet. They will appear here when the administrator adds them.'));
+            }
+            return RefreshIndicator(
+              color: brandRed,
+              onRefresh: () async => setState(() => storesFuture = _loadStores()),
+              child: ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: stores.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final store = stores[index];
+                  return Card(
+                    color: Colors.white,
+                    child: ListTile(
+                      leading: const CircleAvatar(
+                        backgroundColor: paleRed,
+                        child: Icon(Icons.storefront, color: brandRed),
+                      ),
+                      title: Text((store['name'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text([
+                        (store['category'] ?? '').toString(),
+                        (store['address'] ?? '').toString()
+                      ].where((v) => v.isNotEmpty).join(' • ')),
+                      trailing: const Icon(Icons.chevron_left, color: brandRed),
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => ProductsPage(
+                          isArabic: widget.isArabic,
+                          store: store,
+                        ),
+                      )),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _message(IconData icon, String message) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 54, color: brandRed),
+        const SizedBox(height: 14),
+        Text(message, textAlign: TextAlign.center, style: const TextStyle(height: 1.5)),
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: () => setState(() => storesFuture = _loadStores()),
+          icon: const Icon(Icons.refresh),
+          label: Text(tr('إعادة المحاولة', 'Retry')),
+        ),
+      ]),
+    ),
+  );
+}
+
+class ProductsPage extends StatefulWidget {
+  final bool isArabic;
+  final Map<String, dynamic> store;
+  const ProductsPage({super.key, required this.isArabic, required this.store});
+
+  @override
+  State<ProductsPage> createState() => _ProductsPageState();
+}
+
+class _ProductsPageState extends State<ProductsPage> {
+  late Future<List<Map<String, dynamic>>> productsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    productsFuture = _loadProducts();
+  }
+
+  Future<List<Map<String, dynamic>>> _loadProducts() async {
+    final rows = await Supabase.instance.client
+        .from('products')
+        .select('id,name,description,price,image_url')
+        .eq('store_id', widget.store['id'])
+        .eq('is_available', true)
+        .order('name');
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ar = widget.isArabic;
+    return Directionality(
+      textDirection: ar ? TextDirection.rtl : TextDirection.ltr,
+      child: Scaffold(
+        appBar: AppBar(title: Text((widget.store['name'] ?? '').toString())),
+        body: FutureBuilder<List<Map<String, dynamic>>>(
+          future: productsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator(color: brandRed));
+            }
+            if (snapshot.hasError) {
+              return Center(child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(ar ? 'تعذر تحميل المنتجات. حاول مرة أخرى.' : 'Could not load products. Please retry.'),
+              ));
+            }
+            final products = snapshot.data ?? [];
+            if (products.isEmpty) {
+              return Center(child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(ar ? 'لا توجد منتجات متاحة في هذا المتجر حالياً.' : 'No available products in this store yet.', textAlign: TextAlign.center),
+              ));
+            }
+            return RefreshIndicator(
+              color: brandRed,
+              onRefresh: () async => setState(() => productsFuture = _loadProducts()),
+              child: ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: products.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final p = products[index];
+                  final price = p['price'];
+                  return Card(
+                    color: Colors.white,
+                    child: ListTile(
+                      leading: const CircleAvatar(
+                        backgroundColor: paleRed,
+                        child: Icon(Icons.fastfood_outlined, color: brandRed),
+                      ),
+                      title: Text((p['name'] ?? '').toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text((p['description'] ?? '').toString()),
+                      trailing: Text(price == null ? '' : '$price', style: const TextStyle(color: brandRed, fontWeight: FontWeight.w800)),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }
